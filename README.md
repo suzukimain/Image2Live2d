@@ -27,6 +27,37 @@ pip install -r requirements.txt
 
 Proto-buf conflict friendly: MediaPipe is optional and commented out in `requirements.txt` to avoid protobuf conflicts. Install it only if you need face landmarks/selfie segmentation.
 
+## How to run (Windows PowerShell)
+
+Create and activate a virtual environment, install dependencies, then run either the Stage 1 script or the Transformers-based API.
+
+1) Create venv and install deps
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+2-a) Run Stage 1 (rough parts PNG export)
+
+```powershell
+python src/image2live2d/stage1_simple_parts.py .\sample.png --outdir .\outputs\stage1
+```
+
+2-b) Run Transformers-based semantic masks (hair/face/clothes/background)
+
+```powershell
+python -c "from image2live2d import SplitImage; SplitImage.run('input.png', outdir='outputs\\masks')"
+```
+
+Optional: specify a model id (default: nvidia/segformer-b0-finetuned-ade-512-512)
+
+```powershell
+python -c "from image2live2d import SplitImage; SplitImage.run('input.png', outdir='outputs\\masks', model_id='nvidia/segformer-b0-finetuned-ade-512-512')"
+```
+
 ## Usage (Stage 1 script)
 
 ```

@@ -165,25 +165,51 @@ def hsv2df(img):
     return df
 
 def df2rgba(img_df):
-  r_img = img_df.pivot_table(index="x_l", columns="y_l",values= "r").reset_index(drop=True).values
-  g_img = img_df.pivot_table(index="x_l", columns="y_l",values= "g").reset_index(drop=True).values
-  b_img = img_df.pivot_table(index="x_l", columns="y_l",values= "b").reset_index(drop=True).values
-  a_img = img_df.pivot_table(index="x_l", columns="y_l",values= "a").reset_index(drop=True).values
+  # ensure alpha exists
+  if "a" not in img_df.columns:
+    img_df = img_df.copy()
+    img_df["a"] = 255
+  # build full index range to enforce identical shapes
+  xs = np.arange(int(img_df["x_l"].min()), int(img_df["x_l"].max()) + 1)
+  ys = np.arange(int(img_df["y_l"].min()), int(img_df["y_l"].max()) + 1)
+  def pivot_fill(col):
+    piv = img_df.pivot_table(index="x_l", columns="y_l", values=col, aggfunc="first")
+    piv = piv.reindex(index=xs, columns=ys)
+    return piv.fillna(0).reset_index(drop=True).values
+  r_img = pivot_fill("r")
+  g_img = pivot_fill("g")
+  b_img = pivot_fill("b")
+  a_img = pivot_fill("a")
   df_img = np.stack([r_img, g_img, b_img, a_img], 2).astype(np.uint8)
   return df_img
 
 def df2bgra(img_df):
-  r_img = img_df.pivot_table(index="x_l", columns="y_l",values= "r").reset_index(drop=True).values
-  g_img = img_df.pivot_table(index="x_l", columns="y_l",values= "g").reset_index(drop=True).values
-  b_img = img_df.pivot_table(index="x_l", columns="y_l",values= "b").reset_index(drop=True).values
-  a_img = img_df.pivot_table(index="x_l", columns="y_l",values= "a").reset_index(drop=True).values
+  if "a" not in img_df.columns:
+    img_df = img_df.copy()
+    img_df["a"] = 255
+  xs = np.arange(int(img_df["x_l"].min()), int(img_df["x_l"].max()) + 1)
+  ys = np.arange(int(img_df["y_l"].min()), int(img_df["y_l"].max()) + 1)
+  def pivot_fill(col):
+    piv = img_df.pivot_table(index="x_l", columns="y_l", values=col, aggfunc="first")
+    piv = piv.reindex(index=xs, columns=ys)
+    return piv.fillna(0).reset_index(drop=True).values
+  r_img = pivot_fill("r")
+  g_img = pivot_fill("g")
+  b_img = pivot_fill("b")
+  a_img = pivot_fill("a")
   df_img = np.stack([b_img, g_img, r_img, a_img], 2).astype(np.uint8)
   return df_img
 
 def df2rgb(img_df):
-  r_img = img_df.pivot_table(index="x_l", columns="y_l",values= "r").reset_index(drop=True).values
-  g_img = img_df.pivot_table(index="x_l", columns="y_l",values= "g").reset_index(drop=True).values
-  b_img = img_df.pivot_table(index="x_l", columns="y_l",values= "b").reset_index(drop=True).values
+  xs = np.arange(int(img_df["x_l"].min()), int(img_df["x_l"].max()) + 1)
+  ys = np.arange(int(img_df["y_l"].min()), int(img_df["y_l"].max()) + 1)
+  def pivot_fill(col):
+    piv = img_df.pivot_table(index="x_l", columns="y_l", values=col, aggfunc="first")
+    piv = piv.reindex(index=xs, columns=ys)
+    return piv.fillna(0).reset_index(drop=True).values
+  r_img = pivot_fill("r")
+  g_img = pivot_fill("g")
+  b_img = pivot_fill("b")
   df_img = np.stack([r_img, g_img, b_img], 2).astype(np.uint8)
   return df_img
 
@@ -490,7 +516,8 @@ def get_cls_update(ciede_df, df, threshold):
     merge_dict = {}
     for merge in merge_set:
         cls_counts = {cls: len(df[df['label'] == cls]) for cls in merge}
-        max_cls = max(cls_counts, key=cls_counts.get)
+        # Pick class with maximum count using explicit key function
+        max_cls = max(cls_counts.keys(), key=lambda k: cls_counts[k])
         for cls in merge:
             merge_dict[cls] = max_cls
     return merge_dict
@@ -584,8 +611,11 @@ def get_seg_base(input_image, masks, th):
     if int(mask["area"] < th):
       continue
     mask_df = mask2df(mask["segmentation"])
-    df = df.merge(mask_df, left_on=["x_l", "y_l"], right_on=["x_l_m", "y_l_m"], how="inner")
-    df["label"] = np.where(df["m_flg"] == True, idx, df["label"])
+    # 左外部結合で全画素の座標を保持しつつ、このマスクが当たるピクセルのみ m_flg=True を付与
+    df = df.merge(mask_df, left_on=["x_l", "y_l"], right_on=["x_l_m", "y_l_m"], how="left")
+    # 欠損は False 扱いにしてブール化
+    df["m_flg"] = df["m_flg"].fillna(0).astype(bool)
+    df["label"] = np.where(df["m_flg"], idx, df["label"])
     df.drop(columns=["x_l_m", "y_l_m", "m_flg"], inplace=True)
 
   df['r'] = df.groupby('label')['r'].transform(mode_fast)

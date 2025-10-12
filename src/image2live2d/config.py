@@ -1,27 +1,35 @@
+"""
+Consolidated imports for config module.
+"""
+
+# Standard library
+import os
+import copy
+import pickle
+import random
+import string
+
+# Third-party libraries
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans, MiniBatchKMeans
-
-# in-file implementations are provided below: rgb2df, df2rgba
-
-import gradio as gr
-import huggingface_hub
-import onnxruntime as rt
-import copy
+import matplotlib.pyplot as plt
 from PIL import Image
-
-
-import os
-import urllib
-from functools import lru_cache
-from random import randint
-from typing import Any, Callable, Dict, List, Tuple
-
-import cv2
-import gradio as gr
-import numpy as np
+from sklearn.cluster import MiniBatchKMeans
+from sklearn.utils import shuffle
+from skimage import color
+from einops import rearrange
+import torch
+import torch.nn.functional as F
+import onnxruntime as rt
+import huggingface_hub
+from tqdm import tqdm
+from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+import pytoshop
+from pytoshop import layers
+import psd_tools
+from psd_tools.psd import PSD
+import requests
 
 
 
@@ -104,12 +112,7 @@ def get_foreground(img, h_split, v_split, n_cluster, alpha, th_rate):
     return [fg_df, bg_df]
 
 
-import cv2
-import pandas as pd
-from sklearn.cluster import KMeans
-import numpy as np
-from skimage import color 
-from PIL import Image
+ 
 
 
 def skimage_rgb2lab(rgb):
@@ -206,11 +209,7 @@ def cv2pil(image):
     return new_image
 
 
-import cv2
-from einops import rearrange
-import numpy as np
-from sklearn.cluster import MiniBatchKMeans, KMeans
-from sklearn.utils import shuffle
+ 
 
 # use in-file calc_ciede defined below
 
@@ -324,12 +323,7 @@ def get_base_np(img: np.ndarray, loop, cls_num, threshold, size, debug=False, km
 
 
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-from einops import rearrange
-from sklearn.cluster import MiniBatchKMeans
-from sklearn.utils import shuffle
+ 
 
 
 # use in-file calc_ciede and get_cls_update defined below
@@ -423,13 +417,7 @@ def get_base_torch(img: np.ndarray, loop, cls_num, threshold, size, kmeans_sampl
 
 
 
-import cv2
-import pandas as pd
-from sklearn.cluster import MiniBatchKMeans
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-from skimage import color 
+ 
 # use in-file skimage_rgb2lab/df2rgba/rgba2df/hsv2df/rgb2df/mask2df/img_plot/get_foreground defined below
 
 def calc_ciede(mean_list, cls_list):
@@ -712,38 +700,36 @@ def get_composite_layer(input_image, df):
   return base_layer_list, shadow_layer_list, screen_layer_list, addition_layer_list, subtract_layer_list
 
 
-from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
-import numpy as np
-import copy
-from PIL import Image
-import pickle
-import torch
-import os
+ 
 
 def get_mask_generator(pred_iou_thresh, stability_score_thresh, min_mask_region_area, model_path, exe_mode):
+  sam_checkpoint = os.path.join(model_path, "sam_vit_h_4b8939.pth")
+  device = "cuda"
+  model_type = "default"
 
-    sam_checkpoint = os.path.join(model_path, "sam_vit_h_4b8939.pth")
-    device = "cuda"
-    model_type = "default"
+  if exe_mode == "extension":
+    try:
+      from modules.safe import unsafe_torch_load, load  # optional environment
+      torch.load = unsafe_torch_load
+      sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+      sam.to(device=device)
+      torch.load = load
+    except Exception:
+      # fallback to standard load if extension environment not available
+      sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+      sam.to(device=device)
+  else:
+    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+    sam.to(device=device)
 
-    if exe_mode == "extension":
-        from modules.safe import unsafe_torch_load, load
-        torch.load = unsafe_torch_load
-        sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-        sam.to(device=device)
-        torch.load = load
-    else:
-        sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-        sam.to(device=device)
+  mask_generator = SamAutomaticMaskGenerator(
+    model=sam,
+    pred_iou_thresh=pred_iou_thresh,
+    stability_score_thresh=stability_score_thresh,
+    min_mask_region_area=min_mask_region_area,
+  )
 
-    mask_generator = SamAutomaticMaskGenerator(
-            model=sam,
-            pred_iou_thresh=pred_iou_thresh,
-            stability_score_thresh=stability_score_thresh,
-            min_mask_region_area=min_mask_region_area,
-        )
-
-    return mask_generator
+  return mask_generator
 
 def get_masks(image, mask_generator):
     masks = mask_generator.generate(image)
@@ -787,27 +773,9 @@ def show_masks(image_np, masks: np.ndarray, alpha=0.5):
 
 
 
-import numpy as np
-import matplotlib.pyplot as plt
 # using in-file df2rgba
 
-from pytoshop import layers
-from pytoshop.user import nested_layers
-import pytoshop
-
-from PIL import Image
-
-import random, string
-import os
-
-import psd_tools
-from psd_tools.psd import PSD
-
-import requests
-from tqdm import tqdm
-
-
-import pickle
+ 
 def randomname(n):
    randlst = [random.choice(string.ascii_letters + string.digits) for i in range(n)]
    return ''.join(randlst)

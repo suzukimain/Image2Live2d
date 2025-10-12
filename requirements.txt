@@ -12,7 +12,6 @@ scikit-image
 Pillow
 tqdm
 pytoshop
-psd-tool
 
 onnx
 onnxruntime-gpu

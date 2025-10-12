@@ -2,3 +2,6 @@ numpy
 Pillow
 opencv-python
 mediapipe
+transformers
+huggingface-hub
+torch

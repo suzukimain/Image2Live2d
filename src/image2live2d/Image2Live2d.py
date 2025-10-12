@@ -2,163 +2,147 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 from PIL import Image
 
 
 @dataclass
-class SamMask:
-	id: int
-	bbox: Tuple[int, int, int, int]  # x, y, w, h
-	area: int
-	stability_score: float
-	category: Optional[str]
-	mask: np.ndarray  # HxW uint8 {0,255}
+class SplitConfig:
+    model_id: str = "nvidia/segformer-b0-finetuned-ade-512-512"
+    target_labels: Optional[Dict[str, List[str]]] = None
 
 
-class Split_image:
-	"""Split a character image into masks using Segment Anything (SAM).
+class SplitImage:
+    def __init__(self, model_id: str | None = None, target_labels: Optional[Dict[str, List[str]]] = None) -> None:
+        self.config = SplitConfig()
+        if model_id:
+            self.config.model_id = model_id
+        # 抽出したいパーツ名 -> モデル側のラベル文字列のリスト（必ずdictに）
+        self.target_labels: Dict[str, List[str]] = target_labels or {
+            "hair": ["hair"],
+            "face": ["face", "person head", "head"],
+            "clothes": ["clothes", "cloth", "upperclothes", "coat", "jacket", "shirt", "dress", "skirt", "pants", "trousers"],
+            "background": ["background", "wall", "sky", "floor", "ceiling", "building"],
+        }
 
-	Usage:
-		Split_image.run(img="input.png", outdir="outputs/masks", sam_model="vit_h", sam_checkpoint="path/to/sam_vit_h.pth")
-	"""
+    def _load_pipeline(self):
+        from transformers import pipeline
+        return pipeline("semantic-segmentation", model=self.config.model_id)
 
-	@staticmethod
-	def _load_image(img: Any) -> Image.Image:
-		"""Load image from PIL, OpenCV ndarray (BGR/RGB), or file path."""
-		if isinstance(img, Image.Image):
-			return img.convert("RGB")
-		if isinstance(img, np.ndarray):
-			arr: np.ndarray = img
-			if arr.ndim == 2:
-				arr = np.stack([arr] * 3, axis=-1)
-			if arr.ndim == 3 and arr.shape[-1] == 3:
-				# Assume BGR -> RGB
-				arr = np.flip(arr, axis=2)
-			arr = arr.astype(np.uint8, copy=False)
-			return Image.fromarray(arr, mode="RGB")
-		p = Path(img)
-		if not p.exists():
-			raise FileNotFoundError(f"Input not found: {p}")
-		with Image.open(p) as im:
-			return im.convert("RGB")
+    def _labels_to_id_map(self, pipe) -> Dict[str, int]:
+        # pipelineのconfigまたはmodel.config.id2labelからid->labelを取得
+        id2label = None
+        if hasattr(pipe.model, "config") and hasattr(pipe.model.config, "id2label"):
+            id2label = pipe.model.config.id2label
+        if id2label is None and hasattr(pipe, "id2label"):
+            id2label = pipe.id2label
+        if id2label is None:
+            # フォールバック: 既知のADE20K 150クラスを仮想（ここでは空）
+            id2label = {}
+        # label(lower) -> id
+        label2id = {str(v).lower(): int(k) for k, v in id2label.items()}
+        return label2id
 
-	@staticmethod
-	def _ensure_outdir(outdir: str | Path) -> Path:
-		od = Path(outdir)
-		od.mkdir(parents=True, exist_ok=True)
-		return od
+    def segment(self, img: Image.Image) -> Dict[str, np.ndarray]:
+        pipe = self._load_pipeline()
+        out = pipe(img)
+        # transformersのsemantic-segmentationは、各ラベルごとにmaskを返す or 全体マップ返す等、実装差あり
+        # ここでは最も一般的な"labels"+"masks"形式を想定し、fall-backでscore順の辞書を構築
+        label2id = self._labels_to_id_map(pipe)
 
-	@staticmethod
-	def _to_uint8_mask(seg: np.ndarray) -> np.ndarray:
-		if seg.dtype != np.uint8:
-			seg = seg.astype(np.uint8)
-		# Convert boolean -> 0/255 if needed
-		if seg.max() <= 1:
-			seg = seg * 255
-		return seg
+        # 統一マスク辞書（0/255のuint8）
+        masks: Dict[str, Optional[np.ndarray]] = {k: None for k in self.target_labels.keys()}
 
-	@staticmethod
-	def _run_sam(image: Image.Image, model_name: str, checkpoint_path: Optional[str]) -> List[SamMask]:
-		try:
-			import os
-			import torch
-			from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
-		except Exception as e:
-			raise RuntimeError("segment-anything/torch are required for SAM segmentation") from e
+        def to_binary_mask(m) -> np.ndarray:
+            if isinstance(m, Image.Image):
+                arr = np.array(m.convert("L"))
+                return (arr > 127).astype(np.uint8) * 255
+            if isinstance(m, np.ndarray):
+                if m.dtype != np.uint8:
+                    m = m.astype(np.uint8)
+                # 値が0/1なら255スケールに
+                if m.max() == 1:
+                    m = m * 255
+                return (m > 0).astype(np.uint8) * 255
+            if isinstance(m, str):
+                # base64 PNG文字列'
+                import base64, io
+                try:
+                    b = m.split(",")[-1]
+                    data = base64.b64decode(b)
+                    with Image.open(io.BytesIO(data)) as im:
+                        arr = np.array(im.convert("L"))
+                        return (arr > 127).astype(np.uint8) * 255
+                except Exception:
+                    return None  # type: ignore
+            # base64等の場合は未対応
+            return None  # type: ignore
 
-		np_img = np.array(image.convert("RGB"))
-		device = "cuda" if hasattr(torch, "cuda") and torch.cuda.is_available() else "cpu"
+        # パイプライン出力ケース1: list of dicts with 'label' and 'mask'
+        if isinstance(out, list) and len(out) > 0 and isinstance(out[0], dict) and "label" in out[0]:
+            for item in out:
+                label = str(item.get("label", "")).lower()
+                m = to_binary_mask(item.get("mask"))
+                if m is None:
+                    continue
+                for key, aliases in self.target_labels.items():
+                    if any(label == a for a in aliases):
+                        masks[key] = m if masks[key] is None else np.maximum(masks[key], m)
 
-		ckpt = checkpoint_path or os.getenv("SAM_CHECKPOINT")
-		if not ckpt or not Path(ckpt).exists():
-			raise FileNotFoundError("SAM checkpoint not found. Provide sam_checkpoint or set SAM_CHECKPOINT env var.")
+        # パイプライン出力ケース2: dict with 'segmentation'
+        elif isinstance(out, dict) and "segmentation" in out:
+            seg = out["segmentation"]  # HxW int class id
+            if isinstance(seg, Image.Image):
+                seg = np.array(seg)
+            seg = seg.astype(np.int32)
+            for key, aliases in self.target_labels.items():
+                wanted_ids = [label2id[a] for a in aliases if a in label2id]
+                if not wanted_ids:
+                    continue
+                m = np.isin(seg, wanted_ids).astype(np.uint8) * 255
+                masks[key] = m if masks[key] is None else np.maximum(masks[key], m)
 
-		sam = sam_model_registry[model_name](checkpoint=str(ckpt))
-		sam.to(device=device)
-		generator = SamAutomaticMaskGenerator(sam)
-		raw = generator.generate(np_img)
+        # Noneを空マスクに
+        W, H = img.size
+        for k, v in list(masks.items()):
+            if v is None:
+                masks[k] = np.zeros((H, W), dtype=np.uint8)
 
-		masks: List[SamMask] = []
-		for i, m in enumerate(raw):
-			seg = m.get("segmentation")
-			if seg is None:
-				continue
-			seg = (seg.astype(np.uint8)) * 255
-			x, y, w, h = m.get("bbox", (0, 0, seg.shape[1], seg.shape[0]))
-			masks.append(
-				SamMask(
-					id=i,
-					bbox=(int(x), int(y), int(w), int(h)),
-					area=int(m.get("area", int((seg > 0).sum()))),
-					stability_score=float(m.get("stability_score", 0.0)),
-					category=None,
-					mask=seg,
-				)
-			)
-		return masks
+        return masks
 
-	@staticmethod
-	def _guess_category(mask: SamMask, image_size: Tuple[int, int]) -> str:
-		# Very simple heuristic placeholders; refine later with CLIP/semantic models
-		h, w = image_size[1], image_size[0]
-		x, y, bw, bh = mask.bbox
-		area_ratio = mask.area / float(w * h + 1e-6)
-		# Heuristic: large masks covering bottom -> background/clothes/torso
-		if area_ratio > 0.6:
-			return "background"
-		# Upper region likely hair or head
-		if y < h * 0.2:
-			return "hair"
-		# Center-top: face region
-		if y < h * 0.4 and bh < h * 0.6:
-			return "face"
-		# Mid-lower: clothes/torso
-		if y + bh > h * 0.5:
-			return "clothes"
-		return "unknown"
+    def save_masks(self, masks: Dict[str, np.ndarray], out_dir: str) -> Dict[str, str]:
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        saved: Dict[str, str] = {}
+        for key, m in masks.items():
+            im = Image.fromarray(m.astype(np.uint8), mode="L")
+            fp = out_path / f"{key}.png"
+            im.save(fp)
+            saved[key] = str(fp)
+        return saved
 
-	@staticmethod
-	def _save_masks(masks: List[SamMask], outdir: Path) -> Dict[str, str]:
-		saved: Dict[str, str] = {}
-		for m in masks:
-			name = f"mask_{m.id:03d}"
-			if m.category:
-				name = f"{m.category}_{m.id:03d}"
-			fp = outdir / f"{name}.png"
-			Image.fromarray(m.mask, mode="L").save(fp)
-			saved[name] = str(fp)
-		return saved
+    @classmethod
+    def run(
+        cls,
+        img: Union[str, Path, Image.Image],
+        outdir: Union[str, Path] = "outputs/masks",
+        model_id: Optional[str] = None,
+        target_labels: Optional[Dict[str, List[str]]] = None,
+    ) -> Dict[str, str]:
+        """One-shot API: load image (if path), segment, and save masks.
 
-	@staticmethod
-	def run(
-		img: Union[str, Image.Image, np.ndarray],
-		outdir: str | Path = "outputs/masks",
-		sam_model: str = "vit_h",
-		sam_checkpoint: Optional[str] = None,
-		categorize: bool = True,
-		min_area_ratio: float = 0.001,
-	) -> Dict[str, str]:
-		"""Run SAM and save mask PNGs with English names.
+        Returns mapping: part name -> saved file path.
+        """
+        if isinstance(img, (str, Path)):
+            with Image.open(str(img)) as im:
+                pil_img = im.convert("RGB")
+        elif isinstance(img, Image.Image):
+            pil_img = img.convert("RGB")
+        else:
+            raise TypeError("img must be a file path or PIL.Image.Image")
 
-		Returns a dict of {basename: filepath}.
-		"""
-		image = Split_image._load_image(img)
-		out = Split_image._ensure_outdir(outdir)
-
-		masks = Split_image._run_sam(image, sam_model, sam_checkpoint)
-
-		# Filter small masks
-		W, H = image.width, image.height
-		min_area = int(W * H * min_area_ratio)
-		masks = [m for m in masks if m.area >= min_area]
-
-		# Optional: heuristic category names (hair/face/clothes/background)
-		if categorize:
-			for m in masks:
-				m.category = Split_image._guess_category(m, (W, H))
-
-		return Split_image._save_masks(masks, out)
-
+        inst = cls(model_id=model_id, target_labels=target_labels)
+        masks = inst.segment(pil_img)
+        return inst.save_masks(masks, out_dir=str(outdir))

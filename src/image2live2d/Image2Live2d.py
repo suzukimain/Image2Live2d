@@ -23,9 +23,25 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 
 def segment_to_psd(
     image_path: str,
+    outdir: str | None = None,
     layer_mode: str = "composite",  # "composite" or "normal"
     area_th: int = 2000,            # 小片除去のしきい値（画像に応じて調整）
 ):
+    """
+    画像をセグメンテーションし、レイヤー分割したPSDを保存します。
+
+    Parameters
+    - image_path: 入力画像のパス
+    - outdir: 出力先ディレクトリ。未指定時はカレント配下の "output" を使用
+    - layer_mode: "composite" または "normal"
+    - area_th: 小片除去のしきい値
+
+    Returns
+    - 生成されたPSDファイルのパス
+    """
+    # 出力先の決定（引数優先）
+    out_dir = os.path.abspath(outdir) if outdir else OUTPUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
     # 画像読み込み（RGBAにする）
     pil_img = Image.open(image_path).convert("RGBA")
     cv_img = pil2cv(pil_img)
@@ -37,8 +53,8 @@ def segment_to_psd(
         pred_iou_thresh=0.88,
         stability_score_thresh=0.95,
         min_mask_region_area=1000,
-        model_dir=MODEL_DIR,
-        mode="extension",  
+        model_path=MODEL_DIR,
+        exe_mode="extension",  
     )
     masks = get_masks(cv_img, mask_gen)
 
@@ -53,7 +69,7 @@ def segment_to_psd(
             [base_layer_list, bright_layer_list, shadow_layer_list, subtract_layer_list, addition_layer_list],
             ["base", "screen", "multiply", "subtract", "addition"],
             [BlendMode.normal, BlendMode.screen, BlendMode.multiply, BlendMode.subtract, BlendMode.linear_dodge],
-            OUTPUT_DIR,
+            out_dir,
             layer_mode,
         )
     else:
@@ -63,11 +79,11 @@ def segment_to_psd(
             [base_layer_list, bright_layer_list, shadow_layer_list],
             ["base", "bright", "shadow"],
             [BlendMode.normal, BlendMode.normal, BlendMode.normal],
-            OUTPUT_DIR,
+            out_dir,
             layer_mode,
         )
 
-    # フォルダレイヤー差し込み（input/empty.psd がある場合のみ）
+
     try:
         psd_path = divide_folder(psd_path, INPUT_DIR, layer_mode)
     except Exception as e:
@@ -75,7 +91,3 @@ def segment_to_psd(
 
     print(f"PSD saved to: {psd_path}")
     return psd_path
-
-if __name__ == "__main__":
-    # 使用例
-    segment_to_psd("person.png", layer_mode="composite", area_th=2000)

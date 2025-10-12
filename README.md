@@ -27,57 +27,14 @@ pip install -r requirements.txt
 
 Proto-buf conflict friendly: MediaPipe is optional and commented out in `requirements.txt` to avoid protobuf conflicts. Install it only if you need face landmarks/selfie segmentation.
 
-## How to run (Windows PowerShell)
 
-Create and activate a virtual environment, install dependencies, then run either the Stage 1 script or the Transformers-based API.
-
-1) Create venv and install deps
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-2-a) Run Stage 1 (rough parts PNG export)
-
-```powershell
-python src/image2live2d/stage1_simple_parts.py .\sample.png --outdir .\outputs\stage1
-```
-
-2-b) Run Transformers-based semantic masks (hair/face/clothes/background)
-
-```powershell
-python -c "from image2live2d import SplitImage; SplitImage.run('input.png', outdir='outputs\\masks')"
-```
-
-Optional: specify a model id (default: nvidia/segformer-b0-finetuned-ade-512-512)
-
-```powershell
-python -c "from image2live2d import SplitImage; SplitImage.run('input.png', outdir='outputs\\masks', model_id='nvidia/segformer-b0-finetuned-ade-512-512')"
-```
-
-## Usage (Stage 1 script)
-
-```
-python src/image2live2d/stage1_simple_parts.py <input_image_path> --outdir outputs/stage1
-```
-
-Example:
-
-```
-python src/image2live2d/stage1_simple_parts.py sample.png --outdir outputs/stage1
-```
-
-The directory `outputs/stage1` will contain each part as a trimmed transparent PNG.
 
 ## SplitImage quick API (Transformers)
 You can also generate semantic masks (hair/face/clothes/background) via Hugging Face Transformers:
 
 ```python
 from image2live2d import SplitImage
-SplitImage.run('input.png', outdir='outputs/masks')
+SplitImage.run('input.png', outdir='./sample')
 ```
 
 This will save:
@@ -85,6 +42,19 @@ This will save:
 - `outputs/masks/face.png`
 - `outputs/masks/clothes.png`
 - `outputs/masks/background.png`
+
+## Segment to PSD (layerdivider-based)
+Generate a layered PSD directly from a single image. Output folder is configurable via `outdir`.
+
+```python
+from image2live2d import segment_to_psd
+segment_to_psd('input.png', outdir='./sample')
+```
+
+Notes:
+- Requires `ldivider` and its dependencies (SAM-based). The first run may download models into `segment_model`.
+- `layer_mode` can be "composite" (default) or "normal".
+- The output PSD path is returned; internally a subfolder may be created per layer mode.
 
 ## Implementation notes
 - Optional: MediaPipe Face Mesh for face landmarks (fallback to a heuristic box when missing)

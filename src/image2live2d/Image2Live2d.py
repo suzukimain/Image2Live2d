@@ -1,6 +1,7 @@
 import os
 from PIL import Image
 import cv2
+import numpy as np
 
 from pytoshop.enums import BlendMode
 
@@ -53,6 +54,25 @@ def segment_to_psd(
     cv_img = pil2cv(pil_img)
     input_rgba = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGBA)
 
+    # SAM への入力は 3ch RGB かつ長辺 1024 を要求される場合があるため正規化する
+    if cv_img.ndim == 3 and cv_img.shape[2] == 4:
+        sam_img = cv2.cvtColor(cv_img, cv2.COLOR_BGRA2RGB)
+    else:
+        sam_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+
+    H0, W0 = sam_img.shape[:2]
+    target_long = 1024
+    long_side = max(H0, W0)
+    resized = False
+    if long_side != target_long:
+        scale = target_long / float(long_side)
+        new_w = max(1, int(round(W0 * scale)))
+        new_h = max(1, int(round(H0 * scale)))
+        sam_img_resized = cv2.resize(sam_img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        resized = True
+    else:
+        sam_img_resized = sam_img
+
     # セグメンテーションモデル読み込み（初回は自動DLの実装がある想定）
     load_seg_model(MODEL_DIR)
     mask_gen = get_mask_generator(
@@ -62,7 +82,24 @@ def segment_to_psd(
         model_path=MODEL_DIR,
         exe_mode="standalone",  
     )
-    masks = get_masks(cv_img, mask_gen)
+    # SAM 実行（RGB, HxWx3, uint8）
+    masks = get_masks(sam_img_resized, mask_gen)
+
+    # マスクを元解像度に合わせる（最近傍）。area も再計算。
+    if resized and isinstance(masks, list):
+        upscaled_masks = []
+        for m in masks:
+            seg = m.get("segmentation")
+            if seg is None:
+                upscaled_masks.append(m)
+                continue
+            seg_u8 = seg.astype(np.uint8)
+            seg_up = cv2.resize(seg_u8, (W0, H0), interpolation=cv2.INTER_NEAREST).astype(bool)
+            m2 = dict(m)
+            m2["segmentation"] = seg_up
+            m2["area"] = int(seg_up.sum())
+            upscaled_masks.append(m2)
+        masks = upscaled_masks
 
     # マスク群から領域ベースを作成
     df = get_seg_base(input_rgba, masks, area_th)

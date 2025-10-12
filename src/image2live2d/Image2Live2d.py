@@ -6,10 +6,10 @@ import cv2
 from pytoshop.enums import BlendMode
 
 # layerdivider 内ユーティリティ
-from ldivider.ld_convertor import pil2cv
-from ldivider.ld_processor import get_seg_base, get_composite_layer, get_normal_layer
-from ldivider.ld_utils import save_psd, divide_folder, load_seg_model
-from ldivider.ld_segment import get_mask_generator, get_masks
+from image2live2d.ldivider.ld_convertor import pil2cv
+from image2live2d.ldivider.ld_processor import get_seg_base, get_composite_layer, get_normal_layer
+from image2live2d.ldivider.ld_utils import save_psd, divide_folder, load_seg_model
+from image2live2d.ldivider.ld_segment import get_mask_generator, get_masks
 
 # 作業ディレクトリ（demo.py と同様の構成）
 BASE = os.getcwd()
